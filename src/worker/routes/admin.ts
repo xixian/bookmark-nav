@@ -999,17 +999,21 @@ ${pageText || "（无）"}`;
 				linkCount++;
 			}
 
-			// 4) 站点设置:仅补齐当前缺失的键,绝不覆盖已有配置
+			// 4) 站点设置:仅补齐当前缺失的键,绝不覆盖已有配置。
+			// 备份文件是外来输入,必须过白名单;ai.* 一律跳过——否则恶意备份可注入
+			// ai.apiEndpoint,把后续 AI 流量(含匿名可调的语义搜索)引向第三方服务器
 			let settingsFilled = 0;
 			if (payload.settings) {
 				// 行数组形态(早期备份)先归一化为对象
 				const backupSettings = Array.isArray(payload.settings)
 					? Object.fromEntries(payload.settings.map((r) => [r.key, r.value]))
 					: payload.settings;
+				const { kept } = filterAdminSettings(backupSettings);
 				const current = new Map(
 					(await db.select().from(settings)).map((r) => [r.key, r.value]),
 				);
-				for (const [key, value] of Object.entries(backupSettings)) {
+				for (const [key, value] of Object.entries(kept)) {
+					if (key.startsWith("ai.")) continue;
 					if (current.has(key)) continue;
 					await db.insert(settings).values({ key, value });
 					settingsFilled++;

@@ -16,7 +16,7 @@ import { ConfirmDialog, type ConfirmState } from "@/components/confirm-dialog";
 
 // 浏览器插件访问令牌卡片:生成(明文仅显示一次)/ 吊销
 function ApiTokenCard() {
-	const { data: status } = useApiToken();
+	const { data: status, isPending, isError, refetch } = useApiToken();
 	const createToken = useCreateApiToken();
 	const revokeToken = useRevokeApiToken();
 	const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -85,12 +85,30 @@ function ApiTokenCard() {
 				) : (
 					<div className="flex items-center justify-between gap-4">
 						<div className="text-sm text-muted-foreground">
-							{status?.exists
-								? `已启用 · 尾号 …${status.hint}${createdAt ? ` · 创建于 ${createdAt}` : ""}`
-								: "未启用"}
+							{isError ? (
+								// 状态未知时按钮禁用(见下),这里给出可恢复的入口,而不是误显「未启用」
+								<button
+									type="button"
+									className="underline underline-offset-2"
+									onClick={() => refetch()}
+								>
+									令牌状态加载失败,点击重试
+								</button>
+							) : status?.exists ? (
+								`已启用 · 尾号 …${status.hint}${createdAt ? ` · 创建于 ${createdAt}` : ""}`
+							) : (
+								"未启用"
+							)}
 						</div>
 						<div className="flex gap-2">
-							<Button type="button" variant="outline" onClick={status?.exists ? askRotate : handleCreate}>
+							{/* 状态未知(在途/失败)时禁用:此时无法区分「未启用」和「已启用」,
+								放行会绕过确认弹窗直接轮换,静默吊销插件正在使用的令牌 */}
+							<Button
+								type="button"
+								variant="outline"
+								disabled={isPending || isError}
+								onClick={status?.exists ? askRotate : handleCreate}
+							>
 								{status?.exists ? "重新生成" : "生成令牌"}
 							</Button>
 							{status?.exists && (

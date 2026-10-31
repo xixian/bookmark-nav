@@ -24,6 +24,7 @@ import {
 	Sparkles,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -193,24 +194,51 @@ export default function Home() {
 	const normalGrid = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
 	const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform ?? "");
 
-	// AI 语义搜索(请求后端 /api/public/search/semantic)
-	async function runAISearch(q: string) {
-		if (!q.trim() || !aiConfig?.semanticSearch) return;
-		setAiLoading(true);
-		try {
-			const res = await client.api.public["search"].semantic.$get({ query: { q } });
-			if (res.ok) {
-				const body = (await res.json()) as { bookmarks: Bookmark[] };
-				setAiResults(body.bookmarks);
-			} else {
-				setAiResults(null);
-			}
-		} catch {
+	// AI 语义搜索(请求后端 /api/public/search/semantic)。
+	// 每次请求都触发一次 LLM 推理,匿名限流仅 30 次/时:输入必须防抖,否则连续打字很快耗尽额度;
+	// 响应用序号标记,先发后至的过期结果直接丢弃,避免展示与输入框不符
+	const aiSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const aiSearchSeq = useRef(0);
+
+	function runAISearch(q: string, immediate = false) {
+		if (aiSearchTimer.current) clearTimeout(aiSearchTimer.current);
+		// 每次输入变化(含清空)都递增序号:使在途请求的响应全部失效
+		const seq = ++aiSearchSeq.current;
+		if (!q.trim() || !aiConfig?.semanticSearch) {
 			setAiResults(null);
-		} finally {
 			setAiLoading(false);
+			return;
 		}
+		const fire = async () => {
+			setAiLoading(true);
+			try {
+				const res = await client.api.public["search"].semantic.$get({ query: { q } });
+				if (seq !== aiSearchSeq.current) return;
+				if (res.ok) {
+					const body = (await res.json()) as { bookmarks: Bookmark[] };
+					setAiResults(body.bookmarks);
+				} else {
+					setAiResults(null);
+					// 429 说明匿名限流已耗尽:静默退回本地过滤会让用户误以为没有语义结果
+					if (res.status === 429) toast.error("AI 请求过于频繁,请稍后再试");
+				}
+			} catch {
+				if (seq === aiSearchSeq.current) setAiResults(null);
+			} finally {
+				if (seq === aiSearchSeq.current) setAiLoading(false);
+			}
+		};
+		if (immediate) void fire();
+		else aiSearchTimer.current = setTimeout(fire, 500);
 	}
+
+	// 卸载时清理防抖定时器,避免组件销毁后仍触发请求
+	useEffect(
+		() => () => {
+			if (aiSearchTimer.current) clearTimeout(aiSearchTimer.current);
+		},
+		[],
+	);
 
 	// 关闭 AI 或清空关键词时回到本地过滤
 	useEffect(() => {
@@ -338,13 +366,14 @@ export default function Home() {
 							onChange={(e) => {
 								const v = e.target.value;
 								setKeyword(v);
-								if (aiSearch && v.trim()) void runAISearch(v);
+								// 空输入也要走一次:让在途请求过期并清空结果
+								if (aiSearch) runAISearch(v);
 							}}
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && aiSearch && keyword.trim())
-									void runAISearch(keyword);
+									runAISearch(keyword, true);
 								if (e.key === "Escape") e.currentTarget.blur();
 							}}
 							placeholder={aiSearch ? "用自然语言搜索,如「CSS 工具」…" : "搜索书签…"}

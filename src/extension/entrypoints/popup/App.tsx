@@ -31,6 +31,8 @@ export default function App() {
 	const [categoryId, setCategoryId] = useState<string>("none");
 	const [isPrivate, setIsPrivate] = useState(false);
 	const [saving, setSaving] = useState(false);
+	// 保存失败内联展示:不能复用全页 errorMsg 分支,否则表单被整体替换、已填内容不可恢复
+	const [saveError, setSaveError] = useState<string | null>(null);
 	// AI 智能填充:站点配置了 AI(aiEnabled)才显示入口
 	const [aiEnabled, setAiEnabled] = useState(false);
 	const [aiLoading, setAiLoading] = useState(false);
@@ -79,6 +81,7 @@ export default function App() {
 	async function handleSave() {
 		if (!tab) return;
 		setSaving(true);
+		setSaveError(null);
 		try {
 			await createBookmark({
 				title: title.trim() || tab.url,
@@ -93,7 +96,7 @@ export default function App() {
 			});
 			setStatus("saved");
 		} catch (err) {
-			setErrorMsg(err instanceof ApiError ? err.message : "收藏失败,请重试");
+			setSaveError(err instanceof ApiError ? err.message : "收藏失败,请重试");
 		} finally {
 			setSaving(false);
 		}
@@ -256,6 +259,7 @@ export default function App() {
 					</div>
 					<Switch checked={isPrivate} onCheckedChange={setIsPrivate} />
 				</div>
+				{saveError && <p className="text-xs text-destructive">{saveError}</p>}
 				<Button className="w-full" disabled={saving || !title.trim()} onClick={handleSave}>
 					{saving ? "保存中…" : duplicate ? "仍然收藏" : "收藏"}
 				</Button>
