@@ -14,7 +14,7 @@ import { useAuthStatus } from "@/lib/queries";
 export default function Login() {
 	const navigate = useNavigate();
 	const qc = useQueryClient();
-	const { data: auth, isLoading } = useAuthStatus();
+	const { data: auth, isLoading, isError, refetch } = useAuthStatus();
 	const [username, setUsername] = useState("");
 	const [password, setPassword] = useState("");
 	const [submitting, setSubmitting] = useState(false);
@@ -68,7 +68,17 @@ export default function Login() {
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
-					<form onSubmit={handleSubmit} className="space-y-4">
+					{/* 状态查询失败时不能退化为登录表单:全新部署下 isSetup 恒为 false,
+						初始化引导会变成登录页,新用户提交后报「用户名或密码错误」被卡死 */}
+					{isError ? (
+						<div className="flex flex-col items-center gap-3 py-4 text-sm text-muted-foreground">
+							<p>加载站点状态失败,请检查网络</p>
+							<Button variant="outline" size="sm" onClick={() => refetch()}>
+								重试
+							</Button>
+						</div>
+					) : (
+						<form onSubmit={handleSubmit} className="space-y-4">
 						<div className="space-y-2">
 							<Label htmlFor="username">用户名</Label>
 							<Input
@@ -94,7 +104,8 @@ export default function Login() {
 						<Button type="submit" className="w-full" disabled={submitting || isLoading}>
 							{submitting ? "提交中…" : isSetup ? "创建并登录" : "登录"}
 						</Button>
-					</form>
+						</form>
+					)}
 				</CardContent>
 			</Card>
 		</div>

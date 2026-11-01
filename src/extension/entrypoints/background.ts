@@ -18,11 +18,16 @@ export default defineBackground(() => {
 
 	async function saveLink(url: string, title: string) {
 		const { loadConfig } = await import("../lib/config");
-		const { createBookmark } = await import("../lib/api");
+		const { bookmarkExists, createBookmark } = await import("../lib/api");
 		const cfg = await loadConfig();
 		const fail = () => setBadge("!", "#dc2626");
 		if (!cfg) return fail();
 		try {
+			if (await bookmarkExists(url)) {
+				// 已存在:不再创建,琥珀色 D(Duplicate)角标区别于成功/失败
+				setBadge("D", "#d97706");
+				return;
+			}
 			await createBookmark({ title: title.slice(0, 200), url });
 			setBadge("✓", "#16a34a");
 		} catch (err) {

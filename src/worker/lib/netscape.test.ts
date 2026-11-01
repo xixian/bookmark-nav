@@ -55,6 +55,15 @@ describe("parseNetscapeHtml", () => {
 		expect(bm.title).toBe("it's");
 	});
 
+	it("超出 Unicode 范围的数字实体被剔除而非抛错(畸形文件不致 500)", () => {
+		const html = `<DL><p>
+			<DT><A HREF="https://a.com">bad &#99999999999; ok &#65; nul &#0;</A>
+		</DL><p>`;
+		const [bm] = parseNetscapeHtml(html).bookmarks;
+		// 65 → "A" 正常解码;超界实体与 NUL 被剔除,其余文本保留
+		expect(bm.title).toBe("bad  ok A nul ");
+	});
+
 	it("跳过 javascript:/place: 等非 http(s) 协议", () => {
 		const root = parseNetscapeHtml(chromeExport);
 		const all = [...root.bookmarks, ...root.children[0].bookmarks];

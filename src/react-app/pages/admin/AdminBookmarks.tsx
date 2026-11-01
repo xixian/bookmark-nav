@@ -128,7 +128,6 @@ function BookmarkDialog({
 			...f,
 			title: f.title || meta.title || "",
 			description: f.description || meta.description,
-
 		}));
 	}
 
@@ -292,7 +291,6 @@ function BookmarkDialog({
 	);
 }
 
-// 可拖拽的表格行
 function SortableRow({
 	bookmark,
 	categoryName,
@@ -570,7 +568,6 @@ export default function AdminBookmarks() {
 
 	return (
 		<div className="mx-auto max-w-5xl">
-			{/* 操作工具栏 */}
 			<div className="mb-4 flex flex-wrap items-center justify-end gap-3">
 				<div className="flex flex-wrap items-center gap-2">
 					{deadCount > 0 && (
@@ -626,7 +623,6 @@ export default function AdminBookmarks() {
 				</div>
 			)}
 
-			{/* 批量操作栏:有选中时显示 */}
 			{selected.size > 0 && (
 				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border bg-muted/50 px-4 py-2">
 					<span className="text-sm font-medium">已选 {selected.size} 项</span>
@@ -658,7 +654,6 @@ export default function AdminBookmarks() {
 				</div>
 			)}
 
-			{/* 死链检测进度条 */}
 			{checkProgress && (
 				<div className="mb-4 flex items-center gap-3 rounded-xl border bg-background px-4 py-3">
 					<Progress

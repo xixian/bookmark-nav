@@ -9,14 +9,6 @@ export type Category = {
 	visibility: "public" | "private";
 };
 
-export type Bookmark = {
-	id: number;
-	title: string;
-	url: string;
-	categoryId: number | null;
-	visibility: "public" | "private";
-};
-
 export type FlatCategory = { category: Category; depth: number; path: string };
 
 // 把分类树按深度优先拍平,带层级深度与完整路径(与主前端同名函数一致,
@@ -58,16 +50,29 @@ export class ApiError extends Error {
 	}
 }
 
+// 统一请求超时:站点不可达/挂起时若无超时,popup 会永远停在「加载中…」
+const REQUEST_TIMEOUT_MS = 10_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const cfg = await loadConfig();
 	if (!cfg) throw new ApiError(0, "插件未配置,请先在选项页填写站点地址与令牌");
-	const res = await fetch(`${cfg.siteUrl}${path}`, {
-		...init,
-		headers: {
-			Authorization: `Bearer ${cfg.token}`,
-			...(init?.body ? { "Content-Type": "application/json" } : {}),
-		},
-	});
+	let res: Response;
+	try {
+		res = await fetch(`${cfg.siteUrl}${path}`, {
+			...init,
+			headers: {
+				Authorization: `Bearer ${cfg.token}`,
+				...(init?.body ? { "Content-Type": "application/json" } : {}),
+			},
+			signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+		});
+	} catch (err) {
+		// fetch 的裸异常对用户不可读(TimeoutError / Failed to fetch),统一转成可操作的提示
+		if (err instanceof DOMException && err.name === "TimeoutError") {
+			throw new ApiError(0, "请求超时,请检查站点是否可达");
+		}
+		throw new ApiError(0, "网络错误,无法连接站点(若刚配置,请确认已在选项页授予站点访问权限)");
+	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => null)) as { error?: string } | null;
 		// 401 统一引导到重新配置令牌,而不是笼统的"请求失败"
@@ -84,9 +89,11 @@ export function fetchCategories() {
 	);
 }
 
-// 全量书签(用于 URL 查重);数据量大时仍是可接受的单次拉取
-export function fetchBookmarks() {
-	return request<{ bookmarks: Bookmark[] }>("/api/admin/bookmarks");
+// 按 URL 单条查重:popup / 右键收藏用,替代全量拉取后前端比对
+export function bookmarkExists(url: string) {
+	return request<{ exists: boolean }>(
+		`/api/admin/bookmarks/exists?url=${encodeURIComponent(url)}`,
+	);
 }
 
 export function createBookmark(data: BookmarkPayload) {
@@ -119,7 +126,9 @@ export function aiAutoFill(url: string) {
 // 校验站点可达 + 令牌有效(options 页保存前用)
 export async function verifyConfig(siteUrl: string, token: string): Promise<string | null> {
 	try {
-		const site = await fetch(`${siteUrl}/api/public/site`);
+		const site = await fetch(`${siteUrl}/api/public/site`, {
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+		});
 		if (!site.ok) return `站点无响应(HTTP ${site.status})`;
 	} catch {
 		return "无法连接站点,请检查地址";
@@ -127,6 +136,7 @@ export async function verifyConfig(siteUrl: string, token: string): Promise<stri
 	try {
 		const res = await fetch(`${siteUrl}/api/admin/token`, {
 			headers: { Authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		});
 		if (res.status === 401) return "令牌无效,请在后台「安全」页重新生成";
 		if (!res.ok) return `令牌校验失败(HTTP ${res.status})`;

@@ -109,7 +109,7 @@ function NavContent({
 export default function AdminLayout() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { data: auth, isLoading } = useAuthStatus();
+	const { data: auth, isLoading, isError, refetch } = useAuthStatus();
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [collapsed, setCollapsed] = useState(false);
 
@@ -125,6 +125,18 @@ export default function AdminLayout() {
 			navigate("/login", { replace: true });
 		}
 	}, [auth, isLoading, navigate]);
+
+	// 登录态查询失败:不能落在下面的加载分支——retry 耗尽后 auth 恒为空,页面会永久卡在「加载中…」
+	if (isError) {
+		return (
+			<div className="flex min-h-screen flex-col items-center justify-center gap-3 text-muted-foreground">
+				<p className="text-sm">加载登录状态失败,请检查网络</p>
+				<Button variant="outline" size="sm" onClick={() => refetch()}>
+					重试
+				</Button>
+			</div>
+		);
+	}
 
 	if (isLoading || !auth?.authenticated) {
 		return (

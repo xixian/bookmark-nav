@@ -11,6 +11,9 @@ export async function buildBackupPayload(db: Db): Promise<string> {
 		db.select().from(bookmarkTags),
 		db.select().from(settings),
 	]);
+	// ai.*(含第三方 API Key)不进备份:恢复接口本就拒绝 ai.* 键,
+	// 导出它只会把密钥明文留在 R2 与用户下载的文件里
+	const safeSettings = settingRows.filter((r) => !r.key.startsWith("ai."));
 	return JSON.stringify(
 		{
 			exportedAt: new Date().toISOString(),
@@ -20,7 +23,7 @@ export async function buildBackupPayload(db: Db): Promise<string> {
 			tags: tagRows,
 			bookmarkTags: links,
 			// 导出为 key→value 对象而非行数组,与恢复接口的设置结构一致
-			settings: Object.fromEntries(settingRows.map((r) => [r.key, r.value])),
+			settings: Object.fromEntries(safeSettings.map((r) => [r.key, r.value])),
 		},
 		null,
 		2,

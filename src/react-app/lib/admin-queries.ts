@@ -329,6 +329,7 @@ export function useCheckDeadLinks() {
 			onProgress?: (done: number, total: number) => void;
 		}) => {
 			let dead = 0;
+			let unknown = 0;
 			for (let i = 0; i < ids.length; i += 10) {
 				const chunk = ids.slice(i, i + 10);
 				const res = await client.api.admin["check-links"].$post({
@@ -337,14 +338,20 @@ export function useCheckDeadLinks() {
 				if (!res.ok) throw new Error("死链检测请求失败");
 				const { results } = await res.json();
 				dead += results.filter((r) => r.status === "dead").length;
+				unknown += results.filter((r) => r.status === "unknown").length;
 				onProgress?.(Math.min(i + 10, ids.length), ids.length);
 			}
-			return { total: ids.length, dead };
+			return { total: ids.length, dead, unknown };
 		},
-		onSuccess: async ({ total, dead }) => {
+		onSuccess: async ({ total, dead, unknown }) => {
 			await invalidate();
-			if (dead > 0) toast.warning(`检测完成:共 ${total} 个书签,发现 ${dead} 个死链`);
-			else toast.success(`检测完成:${total} 个书签全部可访问`);
+			// unknown 的行保持原状态未检测,toast 必须如实说明,否则用户误以为全部检测过
+			const parts = [`共 ${total} 个书签`];
+			if (dead > 0) parts.push(`死链 ${dead} 个`);
+			if (unknown > 0) parts.push(`${unknown} 个无法判定(未改动)`);
+			const message = `检测完成:${parts.join(",")}`;
+			if (dead > 0) toast.warning(message);
+			else toast.success(message);
 		},
 		onError: (e) => toast.error(e.message),
 	});
@@ -419,8 +426,7 @@ export function useDownloadBackup() {
 export function useExportBookmarks() {
 	return useMutation({
 		mutationFn: async () => {
-			// 必须走 fetch + Blob:导航式下载(<a href download>)会被 SPA 回退拦截,
-			// 保存下来的是前端 index.html 而不是书签文件
+			// 必须走 fetch + Blob:导航式下载会被 SPA 回退拦截,存下来的是 index.html
 			const res = await client.api.admin.export.$get();
 			if (!res.ok) throw new Error("导出失败,请重试");
 			const blob = await res.blob();
@@ -473,7 +479,8 @@ export function useRunLinkCheck() {
 			await qc.invalidateQueries({ queryKey: ["admin-bookmarks"] });
 			toast.success(
 				`检测完成:共 ${r.total} 个书签,死链 ${r.dead} 个` +
-					(r.revived ? `,恢复 ${r.revived} 个` : ""),
+					(r.revived ? `,恢复 ${r.revived} 个` : "") +
+					(r.unknown ? `,${r.unknown} 个无法判定` : ""),
 			);
 		},
 		onError: (e) => toast.error(e.message),

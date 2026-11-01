@@ -6,7 +6,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAdminSettings, useSaveSettings } from "@/lib/admin-queries";
 
-// 图标服务预设(含 {domain} 占位符)
 // DuckDuckGo / FaviconExtractor 对未知域名返回 404,加载失败会走首字母占位;
 // favicon.im 未知域名也返回占位图,但国内可直连
 const iconServicePresets = [

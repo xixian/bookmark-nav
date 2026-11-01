@@ -7,3 +7,8 @@ export function createDb(d1: D1Database) {
 }
 
 export type Db = ReturnType<typeof createDb>;
+
+// drizzle 的 batch 形参是非空元组类型;分片调用方天然 ≥1 条,集中断言一次
+export function asBatch<T>(statements: T[]): [T, ...T[]] {
+	return statements as [T, ...T[]];
+}

@@ -1,8 +1,7 @@
 import { z } from "zod";
 
-// 书签 URL 协议白名单。z.string().url() 接受 javascript: / data: / file: 等协议,
-// 而书签 URL 会在前台渲染成 <a href>,javascript: 会构成存储型 XSS;
-// 导入的书签文件是外部输入,不能只依赖"管理员自己不会输坏协议"这一假设
+// 书签 URL 协议白名单:z.string().url() 接受 javascript: 等协议,而书签会渲染成
+// <a href>,构成存储型 XSS;导入文件是外部输入,不能只依赖「管理员不会输坏协议」
 export function isHttpUrl(url: string): boolean {
 	try {
 		const u = new URL(url);

@@ -20,7 +20,11 @@ function decodeEntities(s: string): string {
 		.replace(/&gt;/g, ">")
 		.replace(/&quot;/g, '"')
 		.replace(/&#39;/g, "'")
-		.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+		.replace(/&#(\d+);/g, (_, n) => {
+			// 钳制到合法码点(超范围实体会让 fromCodePoint 抛 RangeError 使导入 500);剔除非正数
+			const code = Number(n);
+			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+		})
 		.replace(/&amp;/g, "&");
 }
 

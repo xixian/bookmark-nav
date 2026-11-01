@@ -7,12 +7,12 @@
 | 命令 | 作用 |
 | --- | --- |
 | `npm run dev` | 启动本地开发服务(Vite + Workerd),http://localhost:5173,热重载前后端 |
-| `npm run build` | 生产构建:`prepare-deploy-config` 注入构建变量 → tsc → vite build |
+| `npm run build` | 生产构建:`prepare-deploy-config` 注入构建变量生成 `wrangler.deploy.json` → tsc → vite build |
 | `npm run check` | 完整校验:tsc + vite build + wrangler deploy --dry-run(部署前必跑) |
 | `npm run lint` | ESLint 检查全部源码 |
-| `npm test` | 运行单元测试(Vitest,`src/**/*.test.ts`) |
+| `npm test` | 运行单元测试(Vitest,`src/**/*.test.ts` 与 `scripts/**/*.test.ts`) |
 | `npm run preview` | 构建后本地预览生产包 |
-| `npm run deploy` | 应用 D1 迁移(remote)→ wrangler deploy(正式部署) |
+| `npm run deploy` | 生成部署配置 → 应用 D1 迁移(remote)→ `wrangler deploy -c wrangler.deploy.json` |
 | `npm run db:migrate` | 仅对远程 D1 应用迁移 |
 | `npm run cf-typegen` | 重新生成 `worker-configuration.d.ts`(改了 wrangler.json 绑定后跑) |
 | `npm run dev:ext` | 插件开发模式(WXT 热重载) |

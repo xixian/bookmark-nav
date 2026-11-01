@@ -14,7 +14,6 @@ const DAILY_SOFT_LIMIT = 1000;
 // 内置 Workers AI 默认模型(作为占位符,用户可自定义其它模型 id)
 const DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
-// Cloudflare Workers AI 模型列表,供用户查找可用的 model id
 const WORKERS_AI_MODELS_URL = "https://developers.cloudflare.com/workers-ai/models/";
 
 // 埋点 feature 名 -> 中文标签
@@ -156,7 +155,6 @@ export default function AdminAI() {
 						<p className="text-sm text-muted-foreground">加载中…</p>
 					) : (
 						<>
-							{/* 今日核心指标 */}
 							<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 								<Metric label="今日调用" value={usage?.today.total ?? 0} />
 								<Metric
@@ -175,7 +173,6 @@ export default function AdminAI() {
 								<SoftLimitBar total={usage.today.total} />
 							)}
 
-							{/* 各功能分布 */}
 							<div className="space-y-2">
 								<p className="text-xs font-medium text-muted-foreground">
 									各功能调用次数
@@ -213,7 +210,6 @@ export default function AdminAI() {
 								)}
 							</div>
 
-							{/* 提供商分布 */}
 							{usage && usage.byProvider.length > 0 && (
 								<div className="space-y-1 text-xs text-muted-foreground">
 									{usage.byProvider.map((p) => (
@@ -232,7 +228,6 @@ export default function AdminAI() {
 								</div>
 							)}
 
-							{/* 最近错误 */}
 							{usage && usage.recentErrors.length > 0 && (
 								<div className="space-y-1.5">
 									<p className="text-xs font-medium text-muted-foreground">
@@ -262,7 +257,6 @@ export default function AdminAI() {
 				</CardContent>
 			</Card>
 
-			{/* 总开关 */}
 			<Card>
 				<CardHeader>
 					<div className="flex items-center gap-2">
@@ -286,7 +280,6 @@ export default function AdminAI() {
 				</CardContent>
 			</Card>
 
-			{/* 提供商配置 */}
 			<Card>
 				<CardHeader>
 					<CardTitle>AI 提供商</CardTitle>
@@ -416,7 +409,6 @@ export default function AdminAI() {
 				</CardContent>
 			</Card>
 
-			{/* 功能开关 */}
 			<Card>
 				<CardHeader>
 					<CardTitle>功能开关</CardTitle>
@@ -449,7 +441,6 @@ export default function AdminAI() {
 				</CardContent>
 			</Card>
 
-			{/* 隐私说明 & 保存 */}
 			<Card>
 				<CardHeader>
 					<CardTitle>隐私说明</CardTitle>

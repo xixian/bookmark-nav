@@ -292,7 +292,6 @@ export default function AdminCategories() {
 
 	return (
 		<div className="mx-auto max-w-2xl">
-			{/* 操作工具栏 */}
 			<div className="mb-4 flex items-center justify-end">
 				<Button
 					onClick={() => {
@@ -304,7 +303,6 @@ export default function AdminCategories() {
 				</Button>
 			</div>
 
-			{/* 批量操作栏 */}
 			{selected.size > 0 && (
 				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border bg-muted/50 px-4 py-2">
 					<span className="text-sm font-medium">已选 {selected.size} 项</span>
@@ -324,7 +322,6 @@ export default function AdminCategories() {
 			)}
 
 			<div className="overflow-hidden rounded-xl border">
-				{/* 全选栏 */}
 				{flat.length > 0 && (
 					<label className="flex items-center gap-3 border-b bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
 						<Checkbox

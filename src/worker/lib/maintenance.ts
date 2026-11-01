@@ -3,6 +3,7 @@ import { createDb, type Db } from "../db/client";
 import { aiUsage, bookmarks, settings } from "../db/schema";
 import { checkUrl } from "./check-url";
 import { backupToR2 } from "./backup";
+import { pruneRateLimits } from "./rate-limit";
 import {
 	DEFAULT_BACKUP_SCHEDULE,
 	DEFAULT_DEADLINK_SCHEDULE,
@@ -20,6 +21,8 @@ export type LinkCheckResult = {
 	total: number;
 	dead: number;
 	revived: number;
+	// 网络层失败(含子请求配额耗尽)的数量:这些行保持原状态,等下一轮再检
+	unknown: number;
 };
 
 // 全量死链检测:并发检测所有书签,只写状态发生变化的行,并记录最近一次运行结果
@@ -35,16 +38,19 @@ export async function checkAllLinks(db: Db): Promise<LinkCheckResult> {
 	const dead: number[] = []; // 本次新翻转为死链的(只更新这些行,避免写放大)
 	const revived: number[] = [];
 	let totalDead = 0; // 运行后的死链总数(含历史死链),供后台展示
+	let unknown = 0;
 	let cursor = 0;
 	async function worker() {
 		while (cursor < rows.length) {
 			const row = rows[cursor++];
-			const alive = await checkUrl(row.url);
-			if (!alive) {
+			const status = await checkUrl(row.url);
+			if (status === "dead") {
 				totalDead++;
 				if (row.status !== "dead") dead.push(row.id);
-			} else if (row.status !== "active") {
-				revived.push(row.id);
+			} else if (status === "alive") {
+				if (row.status !== "active") revived.push(row.id);
+			} else {
+				unknown++;
 			}
 		}
 	}
@@ -69,7 +75,14 @@ export async function checkAllLinks(db: Db): Promise<LinkCheckResult> {
 		total: rows.length,
 		dead: totalDead,
 		revived: revived.length,
+		unknown,
 	};
+	// unknown 偏多通常意味着子请求配额耗尽或出口网络故障,提醒而不再静默吞掉
+	if (unknown > 0) {
+		console.warn(
+			`[maintenance] ${unknown}/${rows.length} 个书签无法判定存活,已跳过`,
+		);
+	}
 	await Promise.all([
 		writeSetting(db, "deadLink.lastRun", new Date().toISOString()),
 		writeSetting(db, "deadLink.dead", String(result.dead)),
@@ -114,11 +127,13 @@ export async function runScheduledTasks(
 	const enabled = (key: string) => map.get(key) === "1";
 	const result = { checked: false, backed: false, pruned: 0 };
 
-	// 用量清理无开关(纯内部维护,量小代价低),每次 cron 顺带执行
+	// 用量与限流表清理无开关:纯内部维护;限流表若只在触发 429 时清理,
+	// 多 IP 慢速刷量会让表持续膨胀
 	try {
 		result.pruned = await pruneAIUsage(db);
+		await pruneRateLimits(db, 86_400_000);
 	} catch (err) {
-		console.error("[maintenance] AI 用量清理失败:", err);
+		console.error("[maintenance] 定期清理失败:", err);
 	}
 
 	if (
@@ -127,11 +142,20 @@ export async function runScheduledTasks(
 			parseSchedule(map.get("deadLink.schedule"), DEFAULT_DEADLINK_SCHEDULE),
 		)
 	) {
-		try {
-			await checkAllLinks(db);
-			result.checked = true;
-		} catch (err) {
-			console.error("[maintenance] 死链检测失败:", err);
+		// 重入保护:cron 每小时触发,大库检测可能超 1 小时,距上轮开始不足 55 分钟则跳过
+		const startedAt = Date.parse(map.get("deadLink.startedAt") ?? "");
+		const stillRunning =
+			!Number.isNaN(startedAt) && Date.now() - startedAt < 55 * 60_000;
+		if (stillRunning) {
+			console.warn("[maintenance] 上一轮死链检测疑似仍在进行,跳过本轮");
+		} else {
+			await writeSetting(db, "deadLink.startedAt", new Date().toISOString());
+			try {
+				await checkAllLinks(db);
+				result.checked = true;
+			} catch (err) {
+				console.error("[maintenance] 死链检测失败:", err);
+			}
 		}
 	}
 	if (

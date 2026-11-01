@@ -2,9 +2,8 @@ import { eq, lt, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { rateLimits } from "../db/schema";
 
-// 固定窗口计数限流。
-// 用单条 upsert 完成「窗口过期则重置、否则累加」,避免先读后写在并发下漏计。
-// window_start / count 底层存的是 unix 秒,CASE 比较也统一用秒。
+// 固定窗口计数限流:单条 upsert 完成「过期重置否则累加」,避免先读后写并发漏计;
+// window_start / count 存 unix 秒,CASE 比较统一用秒
 export async function consumeRateLimit(
 	db: Db,
 	key: string,

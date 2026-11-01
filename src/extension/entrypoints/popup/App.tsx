@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@app/components/ui/button";
 import { Input } from "@app/components/ui/input";
 import { Label } from "@app/components/ui/label";
@@ -6,12 +6,11 @@ import { Switch } from "@app/components/ui/switch";
 import {
 	ApiError,
 	aiAutoFill,
+	bookmarkExists,
 	createBookmark,
 	flattenCategoryTree,
 	fetchAIConfig,
-	fetchBookmarks,
 	fetchCategories,
-	type Bookmark,
 	type Category,
 } from "../../lib/api";
 import { loadConfig } from "../../lib/config";
@@ -24,7 +23,8 @@ export default function App() {
 	const [siteUrl, setSiteUrl] = useState("");
 	const [tab, setTab] = useState<{ url: string; title: string } | null>(null);
 	const [flatCategories, setFlatCategories] = useState<ReturnType<typeof flattenCategoryTree>>([]);
-	const [existing, setExisting] = useState<Bookmark[]>([]);
+	// 当前页是否已在书签库中(单条接口异步查询,见 useEffect 内注释)
+	const [duplicate, setDuplicate] = useState(false);
 	const [title, setTitle] = useState("");
 	const [description, setDescription] = useState("");
 	const [tags, setTags] = useState("");
@@ -47,10 +47,9 @@ export default function App() {
 			}
 			setSiteUrl(cfg.siteUrl);
 			try {
-				const [tabs, categories, bookmarkRes, aiCfg] = await Promise.all([
+				const [tabs, categories, aiCfg] = await Promise.all([
 					chrome.tabs.query({ active: true, currentWindow: true }),
 					fetchCategories(),
-					fetchBookmarks(),
 					// AI 可用性单独兜底:失败只影响入口显示,不影响收藏表单
 					fetchAIConfig().catch(() => ({ aiEnabled: false })),
 				]);
@@ -63,7 +62,10 @@ export default function App() {
 				setTab(tabInfo);
 				setFlatCategories(flattenCategoryTree(categories as Category[]));
 				setAiEnabled(!!aiCfg.aiEnabled);
-				setExisting(bookmarkRes.bookmarks as Bookmark[]);
+				// 单条接口查重(全量拉取在千级书签时 popup 明显变慢);失败不阻塞收藏
+				bookmarkExists(url)
+					.then((r) => setDuplicate(r.exists))
+					.catch(() => setDuplicate(false));
 				// 预填标题:去掉浏览器标题里常见的「 - 站点名」后缀
 				setTitle(tabInfo.title.replace(/ [-–—|] [^|]*$/, "").trim());
 				setStatus("ready");
@@ -72,11 +74,6 @@ export default function App() {
 			}
 		})();
 	}, []);
-
-	const duplicate = useMemo(
-		() => (tab ? existing.find((b) => b.url === tab.url) : undefined),
-		[existing, tab],
-	);
 
 	async function handleSave() {
 		if (!tab) return;

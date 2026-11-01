@@ -194,9 +194,8 @@ export default function Home() {
 	const normalGrid = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
 	const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform ?? "");
 
-	// AI 语义搜索(请求后端 /api/public/search/semantic)。
-	// 每次请求都触发一次 LLM 推理,匿名限流仅 30 次/时:输入必须防抖,否则连续打字很快耗尽额度;
-	// 响应用序号标记,先发后至的过期结果直接丢弃,避免展示与输入框不符
+	// AI 语义搜索:每次请求都触发一次 LLM 推理(匿名限流 30 次/时),输入必须防抖;
+	// 响应用序号标记,先发后至的过期结果直接丢弃
 	const aiSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const aiSearchSeq = useRef(0);
 
@@ -232,7 +231,7 @@ export default function Home() {
 		else aiSearchTimer.current = setTimeout(fire, 500);
 	}
 
-	// 卸载时清理防抖定时器,避免组件销毁后仍触发请求
+	// 卸载时清理防抖定时器
 	useEffect(
 		() => () => {
 			if (aiSearchTimer.current) clearTimeout(aiSearchTimer.current);

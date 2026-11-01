@@ -35,7 +35,7 @@
    - 构建变量 `R2_BUCKET`(可选):填写一个 R2 存储桶名称(先在「存储和数据库 → R2」创建,如 `bookmark-nav-backup`),开启自动备份功能——全量数据 JSON 每天存入该桶,默认每天北京时间 05:00 运行,频率与时间可在后台「自动任务」页随时调整。不设置则不开备份,部署不受影响
 4. 访问 Worker 域名,首次打开会引导你创建管理员账号
 
-> 为什么 `JWT_SECRET` 放在**构建变量**而不是 Worker 的“变量和机密”:通过 GitHub 集成部署时,每次 `wrangler deploy` 会清空面板上手动添加的机密([cloudflare/workers-sdk#8871](https://github.com/cloudflare/workers-sdk/issues/8871)),导致登录报错;放在构建变量则会在构建时自动注入,每次部署都带上,永不丢失。
+> 为什么 `JWT_SECRET` 放在**构建变量**而不是 Worker 的“变量和机密”:通过 GitHub 集成部署时,每次 `wrangler deploy` 会清空面板上手动添加的机密([cloudflare/workers-sdk#8871](https://github.com/cloudflare/workers-sdk/issues/8871)),导致登录报错;放在构建变量则会在构建时自动注入,每次部署都带上,永不丢失。注入目标是构建时生成的 `wrangler.deploy.json`(已列入 `.gitignore`,部署命令用 `-c` 指向它),被 git 跟踪的 `wrangler.json` 模板永远不含密钥。
 
 > Fork 部署不需要修改仓库里的任何文件(配置均通过构建变量在部署时自动注入),你的 fork 与本仓库永远保持零差异,因此可以随时用 GitHub 的 **Sync fork** 按钮一键同步新版本。
 

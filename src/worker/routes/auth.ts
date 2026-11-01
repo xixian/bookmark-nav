@@ -27,8 +27,7 @@ const LOGIN_WINDOW_MS = 15 * 60_000;
 const LOGIN_IP_LIMIT = 30;
 const LOGIN_USER_LIMIT = 10;
 
-// 初始化管理员:未初始化前该接口对所有人开放,需按 IP 限流,
-// 否则公网部署后扫描器可抢注管理员账号或爆破弱密码
+// 初始化接口未初始化前对所有人开放:先限流再判断,防公网扫描器抢注/爆破
 const SETUP_WINDOW_MS = 60 * 60_000;
 const SETUP_IP_LIMIT = 10;
 
@@ -37,7 +36,7 @@ async function issueToken(
 	c: Context<AppEnv>,
 	user: { id: number; username: string; tokenVersion?: number },
 ) {
-	// 部署时漏配 JWT_SECRET 是最常见的环境问题,给出明确提示而非模糊的 500
+	// 漏配 JWT_SECRET 时给出明确提示,而非模糊的 500
 	if (!c.env.JWT_SECRET) {
 		throw new HTTPException(500, {
 			message:
@@ -77,7 +76,6 @@ export const authRoutes = new Hono<AppEnv>()
 	// 首次初始化管理员,仅当没有任何用户时可用
 	.post("/setup", zValidator("json", credentialsSchema), async (c) => {
 		const db = createDb(c.env.DB);
-		// 未初始化前该接口对所有人开放,先限流再判断,避免被扫描器抢注或爆破
 		const setupRl = await consumeRateLimit(
 			db,
 			`setup:${clientIp(c)}`,
@@ -101,7 +99,7 @@ export const authRoutes = new Hono<AppEnv>()
 				username: users.username,
 				tokenVersion: users.tokenVersion,
 			});
-		// 并发兜底:先检查后插入存在竞态,插完再确认一次,多出来的立即回滚
+		// 并发兜底:先查后插有竞态,插完再确认一次,多出来的立即回滚
 		const all = await db.select({ id: users.id }).from(users);
 		if (all.length > 1) {
 			await db.delete(users).where(eq(users.id, user.id));

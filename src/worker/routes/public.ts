@@ -65,10 +65,8 @@ async function attachTags<T extends { id: number }>(db: Db, rows: T[]) {
 	return rows.map((r) => ({ ...r, tags: map.get(r.id) ?? [] }));
 }
 
-// 允许匿名读取的站点配置键。
-// settings 表里还存着 ai.apiKey / ai.apiEndpoint 等敏感配置,必须对下发的键做白名单,
-// 否则任何访客访问 /api/public/site 都能拿到 AI 密钥明文。
-// 导出供 settings.test.ts 校验「公开白名单 ⊆ 管理白名单」的不变式
+// 允许匿名下发的站点配置键(settings 表还存 ai.apiKey 等敏感配置,不过滤会经 /site 泄露)。
+// 导出供 settings.test.ts 校验「公开白名单 ⊆ 管理白名单」
 export const PUBLIC_SETTING_KEYS = new Set([
 	"siteName",
 	"footer",
@@ -99,7 +97,6 @@ export const publicRoutes = new Hono<AppEnv>()
 		const db = createDb(c.env.DB);
 		const rows = await db.select().from(settings);
 		const safe = rows.filter((r) => PUBLIC_SETTING_KEYS.has(r.key));
-		// 缺失的键补开箱默认值(紧凑模式/图标服务),已保存的值优先
 		return c.json(mergeDefaultSettings(safe));
 	})
 	// AI 可用性(公开,供前端决定是否显示语义搜索入口)
@@ -177,7 +174,7 @@ export const publicRoutes = new Hono<AppEnv>()
 			if (!aiSettings.enabled || !aiSettings.features.semanticSearch) {
 				return c.json({ error: "AI 语义搜索未启用" }, 400);
 			}
-			// 匿名可调用 + 每次触发一次 LLM 推理:先限流,避免 AI 额度被恶意刷爆
+			// 匿名可调用 + 每次触发一次 LLM 推理:先限流防额度被刷爆
 			const rl = await consumeRateLimit(
 				db,
 				`semantic:${clientIp(c)}`,
@@ -190,7 +187,6 @@ export const publicRoutes = new Hono<AppEnv>()
 			}
 			const query = c.req.valid("query").q;
 			const authed = !!c.get("user");
-			// 用 LLM 把自然语言转成可搜索的关键词
 			const system =
 				"你是一个书签搜索引擎。请把用户的自然语言查询改写成用于搜索的关键词列表(从书签的标题、描述、URL、标签里最可能命中的词)。";
 			const user = `请以 JSON 数组返回 2-6 个关键词,不要包含其他内容:
@@ -215,7 +211,7 @@ export const publicRoutes = new Hono<AppEnv>()
 			} catch {
 				// 转换失败则直接使用原始查询
 			}
-			// 关键词 OR 匹配,优先同时命中多个词的
+			// 关键词 OR 匹配,按命中词数排序
 			const allCats = await db.select().from(categories);
 			const allowed = allowedCategoryIds(allCats, authed);
 			const rows = await db
@@ -247,9 +243,12 @@ export const publicRoutes = new Hono<AppEnv>()
 		zValidator("param", z.object({ id: z.coerce.number().int() })),
 		async (c) => {
 			const db = createDb(c.env.DB);
+			// 匿名可写:限流防脚本刷量;超限与下面「不存在/无权限」一样静默返回 ok
+			const rl = await consumeRateLimit(db, `click:${clientIp(c)}`, 120, 60 * 60_000);
+			if (!rl.ok) return c.json({ ok: true });
 			const id = c.req.valid("param").id;
 			const authed = !!c.get("user");
-			// 只统计访客本就能看到的书签:否则可用响应差异探测私密书签是否存在
+			// 只统计访客本就能看到的书签:各路径返回值无差异,不能被用来探测私密书签存在性
 			const allCats = await db.select().from(categories);
 			const allowed = allowedCategoryIds(allCats, authed);
 			const [row] = await db
@@ -261,7 +260,6 @@ export const publicRoutes = new Hono<AppEnv>()
 				.from(bookmarks)
 				.where(eq(bookmarks.id, id))
 				.limit(1);
-			// 不存在或无权限时同样返回 ok,不泄露私密书签的存在性
 			if (!row) return c.json({ ok: true });
 			if (row.visibility !== "public" && !authed) return c.json({ ok: true });
 			if (row.categoryId !== null && !allowed.has(row.categoryId)) {

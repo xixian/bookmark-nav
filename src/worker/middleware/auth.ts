@@ -9,8 +9,7 @@ import { AUTH_COOKIE, type AppEnv, type JwtUser } from "../lib/types";
 
 // 软认证:有合法 token 则注入 user,没有也放行(公开接口按登录态过滤 visibility)
 export const softAuth = createMiddleware<AppEnv>(async (c, next) => {
-	// 浏览器插件走 Bearer 令牌(跨域 fetch 不携带 SameSite=Lax 的 cookie)。
-	// 令牌有效则直接用;无效(如已被吊销)时继续回落到 cookie 认证,避免误伤
+	// 插件走 Bearer 令牌;无效(如已吊销)时继续回落 cookie 认证,避免误伤
 	const authz = c.req.header("Authorization") ?? "";
 	const bearer = authz.startsWith("Bearer ") ? authz.slice(7).trim() : "";
 	if (isApiToken(bearer)) {
@@ -21,7 +20,6 @@ export const softAuth = createMiddleware<AppEnv>(async (c, next) => {
 			await next();
 			return;
 		}
-		// 令牌无效:不 return,继续走下面的 cookie 分支
 	}
 
 	const token = getCookie(c, AUTH_COOKIE);
@@ -29,7 +27,7 @@ export const softAuth = createMiddleware<AppEnv>(async (c, next) => {
 		try {
 			const payload = await verify(token, c.env.JWT_SECRET, "HS256");
 			if (typeof payload.id === "number" && typeof payload.username === "string") {
-				// 校验 token 版本:改密码后旧 token 立即失效,避免被盗会话继续可用
+				// 校验 token 版本:改密码后旧 token 立即失效
 				const db = createDb(c.env.DB);
 				const [user] = await db
 					.select({

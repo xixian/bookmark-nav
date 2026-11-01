@@ -197,6 +197,8 @@ dist
 
 ### Wrangler ###
 .wrangler/
+# 构建时由 prepare-deploy-config.mjs 生成的部署配置,可能含注入的 JWT_SECRET
+wrangler.deploy.json
 .env*
 !.env.example
 .dev.vars*

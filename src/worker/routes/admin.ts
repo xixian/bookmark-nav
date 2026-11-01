@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
-import { createDb, type Db } from "../db/client";
+import { asBatch, createDb, type Db } from "../db/client";
 import {
 	aiUsage,
 	bookmarks,
@@ -30,8 +30,8 @@ import { generateApiToken, hashApiToken, tokenHint } from "../lib/token";
 import { isHttpUrl, httpUrlSchema } from "../lib/http-url";
 
 const idParam = zValidator("param", z.object({ id: z.coerce.number().int() }));
-// 与其余批量接口一致限制单次条数:reorder 逐条 UPDATE,不设上限会拖垮请求
-const reorderSchema = z.object({ ids: z.array(z.number().int()).min(1).max(1000) });
+// 覆盖全量排序,上限须大于库容;接口内按 90 条分片 batch 提交
+const reorderSchema = z.object({ ids: z.array(z.number().int()).min(1).max(50_000) });
 
 // 校验分类挂到 parentId 下是否合法:防循环嵌套 + 限制最大层级,见 lib/category-nesting
 
@@ -59,7 +59,6 @@ const bookmarkInput = z.object({
 
 // JSON 备份文件的结构(buildBackupPayload 的产物);字段宽松以兼容历史备份,
 // 未知键由 zod 自动剥离,非法行在恢复过程中跳过
-// 供前端导入 hook 复用的备份负载类型
 export type BackupImportPayload = z.input<typeof backupImportSchema>;
 
 const backupImportSchema = z.object({
@@ -128,7 +127,7 @@ async function syncTags(db: Db, bookmarkId: number, names: string[]) {
 			.insert(bookmarkTags)
 			.values(rows.map((t) => ({ bookmarkId, tagId: t.id })));
 	}
-	// 解绑后可能留下无人引用的标签,顺带清理,否则 tags 表会随反复编辑不断堆积
+	// 顺带清理无人引用的标签,避免反复编辑不断堆积
 	await db
 		.delete(tags)
 		.where(
@@ -136,13 +135,10 @@ async function syncTags(db: Db, bookmarkId: number, names: string[]) {
 		);
 }
 
-// 检查网址存活:实现在 lib/check-url.ts,供本文件与定时任务共用
-
 // 解析 title / meta 只需页面头部,无需下载完整响应
 const MAX_METADATA_BYTES = 200_000;
 
-// 读取响应体并限制总量。直接 res.text() 会把整个响应读进内存,
-// 遇到异常大的页面会撑爆 Worker 内存上限。
+// 限制读取量:res.text() 会把整个响应读进内存,超大页面会撑爆 Worker 内存上限
 async function readBodyCapped(res: Response, limit: number): Promise<string> {
 	if (!res.body) return "";
 	const reader = res.body.getReader();
@@ -170,7 +166,6 @@ async function readBodyCapped(res: Response, limit: number): Promise<string> {
 	return new TextDecoder().decode(buf);
 }
 
-// 抓取网页元信息,用于表单自动填充
 async function fetchMetadata(url: string) {
 	const res = await fetch(url, {
 		signal: AbortSignal.timeout(8000),
@@ -225,8 +220,15 @@ export const adminRoutes = new Hono<AppEnv>()
 		async (c) => {
 			const db = createDb(c.env.DB);
 			const { ids } = c.req.valid("json");
-			for (const [i, id] of ids.entries()) {
-				await db.update(categories).set({ sort: i }).where(eq(categories.id, id));
+			// 分片 batch(90 条/批)一次往返;batch 内原子执行,不留部分排序
+			for (let i = 0; i < ids.length; i += 90) {
+				await db.batch(
+					asBatch(
+						ids.slice(i, i + 90).map((id, j) =>
+							db.update(categories).set({ sort: i + j }).where(eq(categories.id, id)),
+						),
+					),
+				);
 			}
 			return c.json({ ok: true });
 		},
@@ -288,6 +290,21 @@ export const adminRoutes = new Hono<AppEnv>()
 			bookmarks: rows.map((r) => ({ ...r, tags: map.get(r.id) ?? [] })),
 		});
 	})
+	// 按 URL 单条查重(popup / 右键收藏用);须注册在 /bookmarks/:id 之前
+	.get(
+		"/bookmarks/exists",
+		zValidator("query", z.object({ url: httpUrlSchema })),
+		async (c) => {
+			const db = createDb(c.env.DB);
+			const { url } = c.req.valid("query");
+			const [row] = await db
+				.select({ id: bookmarks.id })
+				.from(bookmarks)
+				.where(eq(bookmarks.url, url))
+				.limit(1);
+			return c.json({ exists: !!row });
+		},
+	)
 	.post("/bookmarks", zValidator("json", bookmarkInput), async (c) => {
 		const db = createDb(c.env.DB);
 		const { tags: tagNames, ...data } = c.req.valid("json");
@@ -301,8 +318,15 @@ export const adminRoutes = new Hono<AppEnv>()
 		async (c) => {
 			const db = createDb(c.env.DB);
 			const { ids } = c.req.valid("json");
-			for (const [i, id] of ids.entries()) {
-				await db.update(bookmarks).set({ sort: i }).where(eq(bookmarks.id, id));
+			// 分片 batch(90 条/批)一次往返;batch 内原子执行,不留部分排序
+			for (let i = 0; i < ids.length; i += 90) {
+				await db.batch(
+					asBatch(
+						ids.slice(i, i + 90).map((id, j) =>
+							db.update(bookmarks).set({ sort: i + j }).where(eq(bookmarks.id, id)),
+						),
+					),
+				);
 			}
 			return c.json({ ok: true });
 		},
@@ -435,7 +459,6 @@ ${pageText || "（无）"}`;
 
 					category?: string | null;
 				}>(raw);
-				// 将 AI 推荐的分类名映射到已有分类 id
 				let categoryId: number | null = null;
 				if (parsed.category) {
 					const matched = (await db.select().from(categories)).find(
@@ -535,6 +558,15 @@ ${pageText || "（无）"}`;
 			let catCount = 0;
 			let bmCount = 0;
 			let skipped = 0;
+			// 书签收集后分批 batch 插入(原子执行):万级导出从上万次逐条往返降到百余次;
+			// 分类仍逐条插入——子分类需要父级自增 id
+			const pendingBookmarks: {
+				title: string;
+				url: string;
+				icon: string | null;
+				categoryId: number | null;
+				createdAt?: Date;
+			}[] = [];
 
 			async function importBookmarks(
 				folder: ParsedFolder,
@@ -546,10 +578,11 @@ ${pageText || "（无）"}`;
 						continue;
 					}
 					existingUrls.add(b.url);
-					await db.insert(bookmarks).values({
+					pendingBookmarks.push({
 						title: b.title.slice(0, 200),
 						url: b.url,
-						icon: b.icon,
+						// 限长与 import-json 对齐:超大 data-URI 会导致插入失败
+						icon: b.icon?.slice(0, 2000) ?? null,
 						categoryId,
 						...(b.addDate ? { createdAt: new Date(b.addDate * 1000) } : {}),
 					});
@@ -572,6 +605,15 @@ ${pageText || "（无）"}`;
 			}
 
 			await importBookmarks(tree, null);
+			for (let i = 0; i < pendingBookmarks.length; i += 90) {
+				await db.batch(
+					asBatch(
+						pendingBookmarks
+							.slice(i, i + 90)
+							.map((row) => db.insert(bookmarks).values(row)),
+					),
+				);
+			}
 			return c.json({ categories: catCount, bookmarks: bmCount, skipped });
 		},
 	)
@@ -634,12 +676,23 @@ ${pageText || "（无）"}`;
 				.from(bookmarks)
 				.where(inArray(bookmarks.id, c.req.valid("json").ids));
 			const results = await Promise.all(
-				rows.map(async (r) => ({
-					id: r.id,
-					status: (await checkUrl(r.url)) ? ("active" as const) : ("dead" as const),
-				})),
+				rows.map(async (r) => {
+					const status = await checkUrl(r.url);
+					// 对外沿用库里的 active/dead 语义;unknown 表示无法判定,不落库
+					return {
+						id: r.id,
+						status:
+							status === "unknown"
+								? ("unknown" as const)
+								: status === "dead"
+									? ("dead" as const)
+									: ("active" as const),
+					};
+				}),
 			);
 			for (const r of results) {
+				// unknown(网络失败)不落库:手动批量检测同样可能撞上网络故障,误写会污染状态
+				if (r.status === "unknown") continue;
 				await db
 					.update(bookmarks)
 					.set({ status: r.status })
@@ -821,11 +874,19 @@ ${pageText || "（无）"}`;
 				console.warn("[settings] 忽略未知设置键:", ignored.join(", "));
 			}
 			const db = createDb(c.env.DB);
-			for (const [key, value] of Object.entries(kept)) {
-				await db
-					.insert(settings)
-					.values({ key, value })
-					.onConflictDoUpdate({ target: settings.key, set: { value } });
+			const entries = Object.entries(kept);
+			// 一批提交避免逐键往返;空数组传给 batch 会报错,先判空
+			if (entries.length > 0) {
+				await db.batch(
+					asBatch(
+						entries.map(([key, value]) =>
+							db
+								.insert(settings)
+								.values({ key, value })
+								.onConflictDoUpdate({ target: settings.key, set: { value } }),
+						),
+					),
+				);
 			}
 			return c.json({ ok: true, ignored: ignored.length > 0 ? ignored : undefined });
 		},
@@ -921,13 +982,14 @@ ${pageText || "（无）"}`;
 				catIdMap.set(cat.id, id);
 			}
 
-			// 2) 书签:同 URL 跳过;强制 http(s) 协议(备份文件是外部输入);还原时间戳/置顶/可见性/死链状态
+			// 2) 书签:同 URL 跳过;强制 http(s) 协议(备份文件是外部输入);还原时间戳/置顶/可见性/死链状态。
+			// 校验后收集、分批 batch 插入(90 条/批)并取回新 id,不再逐条往返
 			const existingUrls = new Set(
 				(await db.select({ url: bookmarks.url }).from(bookmarks)).map((r) => r.url),
 			);
 			const bmIdMap = new Map<number, number>();
-			let bmCount = 0;
 			let skipped = 0;
+			const pendingBookmarks: { backupId: number; values: Record<string, unknown> }[] = [];
 			for (const b of payload.bookmarks) {
 				let url = b.url;
 				try {
@@ -945,9 +1007,9 @@ ${pageText || "（无）"}`;
 				}
 				existingUrls.add(url);
 				const created = toBackupDate(b.createdAt);
-				const [row] = await db
-					.insert(bookmarks)
-					.values({
+				pendingBookmarks.push({
+					backupId: b.id,
+					values: {
 						title: b.title.slice(0, 200),
 						url,
 						description: b.description ?? null,
@@ -958,50 +1020,87 @@ ${pageText || "（无）"}`;
 						visibility: b.visibility ?? "public",
 						status: b.status ?? "active",
 						...(created ? { createdAt: created, updatedAt: created } : {}),
-					})
-					.returning({ id: bookmarks.id });
-				bmIdMap.set(b.id, row.id);
-				bmCount++;
+					},
+				});
 			}
+			for (let i = 0; i < pendingBookmarks.length; i += 90) {
+				const chunk = pendingBookmarks.slice(i, i + 90);
+				const results = await db.batch(
+					asBatch(
+						chunk.map((t) =>
+							db.insert(bookmarks).values(t.values as typeof bookmarks.$inferInsert).returning({ id: bookmarks.id }),
+						),
+					),
+				);
+				results.forEach((rows, k) => {
+					if (rows[0]) bmIdMap.set(chunk[k].backupId, rows[0].id);
+				});
+			}
+			// bmIdMap 只在本次循环写入,其大小即本次新导入的书签数
+			const bmCount = bmIdMap.size;
 
-			// 3) 标签与关联:同名复用,只为本次新导入的书签建立关联
+			// 3) 标签与关联:同名复用,只为本次新导入的书签建立关联;均分批 batch 插入
 			const existingTags = await db.select().from(tags);
 			const tagNameMap = new Map(existingTags.map((r) => [r.name, r.id]));
 			const tagIdMap = new Map<number, number>();
-			for (const t of payload.tags) {
-				let id = tagNameMap.get(t.name);
-				if (id === undefined) {
-					const [row] = await db
-						.insert(tags)
-						.values({ name: t.name.slice(0, 30) })
-						.returning({ id: tags.id });
-					id = row.id;
-					tagNameMap.set(t.name, id);
+			// 载荷内同名去重:同批两个同名列会撞 UNIQUE 使整批失败
+			const seenNames = new Set<string>();
+			const newTags = payload.tags.filter((t) => {
+				if (tagNameMap.has(t.name) || seenNames.has(t.name)) return false;
+				seenNames.add(t.name);
+				return true;
+			});
+			for (let i = 0; i < newTags.length; i += 90) {
+				const results = await db.batch(
+					asBatch(
+						newTags
+							.slice(i, i + 90)
+							.map((t) =>
+								db
+									.insert(tags)
+									.values({ name: t.name.slice(0, 30) })
+									.returning({ id: tags.id, name: tags.name }),
+							),
+					),
+				);
+				for (const rows of results) {
+					for (const row of rows) tagNameMap.set(row.name, row.id);
 				}
-				tagIdMap.set(t.id, id);
 			}
+			for (const t of payload.tags) {
+				const id = tagNameMap.get(t.name);
+				if (id !== undefined) tagIdMap.set(t.id, id);
+			}
+			// onConflictDoNothing 跳过载荷内重复对(联合主键),returning 行数即真实新增数
+			const linkValues = payload.bookmarkTags
+				.map((link) => ({
+					bookmarkId: bmIdMap.get(link.bookmarkId),
+					tagId: tagIdMap.get(link.tagId),
+				}))
+				.filter(
+					(v): v is { bookmarkId: number; tagId: number } =>
+						v.bookmarkId !== undefined && v.tagId !== undefined,
+				);
 			let linkCount = 0;
-			for (const link of payload.bookmarkTags) {
-				const newBmId = bmIdMap.get(link.bookmarkId);
-				const newTagId = tagIdMap.get(link.tagId);
-				if (newBmId === undefined || newTagId === undefined) continue;
-				const exists = await db
-					.select({ bookmarkId: bookmarkTags.bookmarkId })
-					.from(bookmarkTags)
-					.where(
-						sql`${bookmarkTags.bookmarkId} = ${newBmId} AND ${bookmarkTags.tagId} = ${newTagId}`,
-					)
-					.limit(1);
-				if (exists.length > 0) continue;
-				await db
-					.insert(bookmarkTags)
-					.values({ bookmarkId: newBmId, tagId: newTagId });
-				linkCount++;
+			for (let i = 0; i < linkValues.length; i += 90) {
+				const results = await db.batch(
+					asBatch(
+						linkValues
+							.slice(i, i + 90)
+							.map((v) =>
+								db
+									.insert(bookmarkTags)
+									.values(v)
+									.onConflictDoNothing()
+									.returning({ bookmarkId: bookmarkTags.bookmarkId }),
+							),
+					),
+				);
+				for (const rows of results) linkCount += rows.length;
 			}
 
-			// 4) 站点设置:仅补齐当前缺失的键,绝不覆盖已有配置。
-			// 备份文件是外来输入,必须过白名单;ai.* 一律跳过——否则恶意备份可注入
-			// ai.apiEndpoint,把后续 AI 流量(含匿名可调的语义搜索)引向第三方服务器
+			// 4) 站点设置:仅补缺不覆盖;备份是外来输入须过白名单,ai.* 一律跳过——
+			// 防恶意备份注入 ai.apiEndpoint,把 AI 流量(含匿名语义搜索)引向第三方
 			let settingsFilled = 0;
 			if (payload.settings) {
 				// 行数组形态(早期备份)先归一化为对象
@@ -1060,7 +1159,6 @@ ${pageText || "（无）"}`;
 		// created_at 是 unix 秒整数,必须直接比较:
 		// SQLite 的 unixepoch(created_at) 会把裸整数当儒略日解析而返回 NULL,导致过滤恒不成立
 		const sinceToday = gt(aiUsage.createdAt, new Date(Date.now() - 86_400_000));
-		// 今日总调用 / 成功 / 失败
 		const [todayAgg] = await db
 			.select({
 				total: sql<number>`count(*)`,
@@ -1069,7 +1167,6 @@ ${pageText || "（无）"}`;
 			})
 			.from(aiUsage)
 			.where(sinceToday);
-		// 今日按功能分布
 		const byFeature = await db
 			.select({
 				feature: aiUsage.feature,
@@ -1079,7 +1176,6 @@ ${pageText || "（无）"}`;
 			.from(aiUsage)
 			.where(sinceToday)
 			.groupBy(aiUsage.feature);
-		// 今日按 provider 分布
 		const byProvider = await db
 			.select({
 				provider: aiUsage.provider,
@@ -1088,7 +1184,7 @@ ${pageText || "（无）"}`;
 			.from(aiUsage)
 			.where(sinceToday)
 			.groupBy(aiUsage.provider);
-		// 最近失败记录(含错误原因,便于排查 429 / Key 失效)
+		// 最近失败记录,便于排查 429 / Key 失效
 		const recentErrors = await db
 			.select({
 				feature: aiUsage.feature,
